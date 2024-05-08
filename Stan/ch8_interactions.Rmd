@@ -1,0 +1,230 @@
+---
+title: "ch8_interactions"
+output: html_document
+date: "2024-05-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 8H4 Exercize
+
+```{r cars}
+library(rethinking)
+library(brms)
+library(tidyverse)
+#library(gghighlight)
+
+data(nettle)
+
+nettle <- nettle %>%
+  as_tibble() %>%
+  mutate(lang_per_cap = num.lang / k.pop,
+         log_lang_per_cap = log(lang_per_cap),
+         log_area = log(area),
+         lang_per_cap_std = standardize(log_lang_per_cap),
+         area_std = standardize(log_area),
+         mean_growing_std = standardize(mean.growing.season),
+         sd_growing_std = standardize(sd.growing.season))
+nettle
+```
+
+
+```{r cars}
+plot(x = nettle$mean_growing_std, y = nettle$lang_per_cap_std)
+
+```
+
+## Models fitting
+
+We are going to fit two models, one with only mean_growing_std as a predictor, and one that also includes area_std. We can then compare the models using PSIS-LOO.
+
+```{r pressure, echo=FALSE}
+b8h4a_1 <- brms::brm(lang_per_cap_std ~ mean_growing_std,
+               data = nettle, family = gaussian,
+               prior = c(prior(normal(0, 0.2), class = Intercept),
+                         prior(normal(0, 0.5), class = b),
+                         prior(exponential(1), class = sigma)),
+               iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 1234
+               )
+
+
+b8h4a_2 <- brms::brm(lang_per_cap_std ~ mean_growing_std + area_std,
+               data = nettle, family = gaussian,
+               prior = c(prior(normal(0, 0.2), class = Intercept),
+                         prior(normal(0, 0.5), class = b),
+                         prior(exponential(1), class = sigma)),
+               iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 1234
+               )
+
+b8h4a_1 <- add_criterion(b8h4a_1, criterion = "loo")
+b8h4a_2 <- add_criterion(b8h4a_2, criterion = "loo")
+
+loo_compare(b8h4a_1, b8h4a_2)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+The model without area is slightly preferred, but PSIS-LOO isn’t really able to distinguish between the models very well. For the purpose of this exercise, we’ll continue with model b8h4a_2, which includes both predictors. Visualizing the model, we see that, as expected given the model comparisons, area doesn’t appear to have much impact. However, there does appear to be a positive relationship between the the mean growing season and the number of languages.
+```{r}
+library(tidybayes)
+library(wjake)
+
+new_nettle <- crossing(area_std = seq(-4, 4, by = 2),
+                       mean_growing_std = seq(-4, 4, by = 1),
+                       sd_growing_std = seq(-4, 4, by = 1))
+
+to_string <- as_labeller(c(`-4` = "Area = -4", `-2` = "Area = -2",
+                           `0` = "Area = 0", 
+                           `2` = "Area = 2", `4` = "Area = 4"))
+
+new_nettle %>% 
+  add_epred_draws(b8h4a_2, ndraws = 1000) %>% 
+  tidybayes::mean_qi(.width = c(0.67, 0.89, 0.97)) %>% 
+  ggplot(aes(x = mean_growing_std, y = .epred, ymin = .lower, ymax = .upper)) +
+  facet_wrap(~area_std, nrow = 1, labeller = to_string) +
+  geom_lineribbon(color = NA) +
+  scale_fill_manual(values = ramp_blue(seq(0.9, 0.2, length.out = 3)),
+                    breaks = c("0.67", "0.89", "0.97")) +
+  labs(x = "Mean Growing Season (standardized)",
+       y = "Log Languages per Capita (standardized)",
+       fill = "Interval")
+```
+b. Now evaluate the hypothesis that language diversity is negatively associated with the standard deviation of length of growing season, sd.growing.season. This hypothesis follows from uncertainty in harvest favoring social insurance through larger social networks and therefore fewer languages. Again, consider log(area) as a covariate (not an interaction).
+
+For the second part, we replace mean_growing_std with sd_growing_std. Again, we’ll fit two models and compare with PSIS-LOO.
+
+```{r}
+b8h4b_1 <- brms::brm(lang_per_cap_std ~ sd_growing_std,
+               data = nettle, family = gaussian,
+               prior = c(prior(normal(0, 0.2), class = Intercept),
+                         prior(normal(0, 0.5), class = b),
+                         prior(exponential(1), class = sigma)),
+               iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 1234)
+
+b8h4b_2 <- brms::brm(lang_per_cap_std ~ sd_growing_std + area_std,
+               data = nettle, family = gaussian,
+               prior = c(prior(normal(0, 0.2), class = Intercept),
+                         prior(normal(0, 0.5), class = b),
+                         prior(exponential(1), class = sigma)),
+               iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 1234)
+
+b8h4b_1 <- add_criterion(b8h4b_1, criterion = "loo")
+b8h4b_2 <- add_criterion(b8h4b_2, criterion = "loo")
+```
+The story here is much the same. PSIS-LOO can’t really differentiate between the two models, indicating that area doesn’t add too much information. This is again reflected in the visualization. We see that the expected distribution of regression lines is fairly similar for all levels of area. Additionally, we do see a negative relationship between the standard deviation of the growing season and the number of languages, as the question suggested.
+```{r}
+loo_compare(b8h4b_1, b8h4b_2)
+```
+```{r}
+#Plot
+new_nettle %>% 
+  add_epred_draws(b8h4b_2, ndraws = 1000) %>% 
+  mean_qi(.width = c(0.67, 0.89, 0.97)) %>% 
+  ggplot(aes(x = sd_growing_std, y = .epred, ymin = .lower, ymax = .upper)) +
+  facet_wrap(~area_std, nrow = 1, labeller = to_string) +
+  geom_lineribbon(color = NA) +
+  scale_fill_manual(values = ramp_blue(seq(0.9, 0.2, length.out = 3)),
+                    breaks = c("0.67", "0.89", "0.97")) +
+  labs(x = "Standard Deviation of Growing Season (standardized)",
+       y = "Log Languages per Capita (standardized)",
+       fill = "Interval")
+```
+Finally, evaluate the hypothesis that mean.growing.season and sd.growing.season interact to synergistically reduce language diversity. The idea is that, in nations with longer average growing seasons, high variance makes storage and redistribution even more important than it would be otherwise. That way, people can cooperate to preserve and protect windfalls to be used during the droughts.
+
+In the third part of the question, we are asked to add the interaction term. We’ll drop area since it does not appear to have an effect in either of the previous parts of this question.
+```{r}
+b8h4_c <- brm(lang_per_cap_std ~ mean_growing_std * sd_growing_std,
+              data = nettle, family = gaussian,
+              prior = c(prior(normal(0, 0.2), class = Intercept),
+                        prior(normal(0, 0.5), class = b),
+                        prior(exponential(1), class = sigma)),
+              iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 1234
+              )
+
+summary(b8h4_c)
+```
+We see that the interaction is negative. What this means can be seen by visualizing the interaction from both directions. This is shown in the following image. In the top row, we plot the expected effect of mean growing season on languages. We see that there is a positive relationship between mean growing season and languages, except when there is high variance in the growing. Similarly, the bottom row shows the expected effect of standard deviation of the growing season on languages. When the mean growing season is short, there is no effect of the variance on languages. When the mean growing season is long, there is a negative relationship between variance and languages.
+```{r}
+library(patchwork)
+library(glue)
+
+new_nettle <- crossing(mean_growing_std = seq(-2, 2, by = 0.5),
+                       sd_growing_std = seq(-2, 4, by = 0.5))
+
+int_preds <- new_nettle %>% 
+  add_epred_draws(b8h4_c, ndraws = 1000) %>% 
+  mean_qi(.width = 0.97)
+
+facet_levels <- seq(-2, 2, by = 2)
+sd_facets <- list_along(facet_levels)
+for (i in seq_along(sd_facets)) {
+  points <- nettle %>% 
+    mutate(diff = sd_growing_std - facet_levels[i])
+  
+  p <- int_preds %>% 
+    filter(sd_growing_std == facet_levels[i]) %>% 
+    ggplot(aes(x = mean_growing_std, y = .epred, ymin = .lower,
+               ymax = .upper)) +
+    geom_lineribbon(fill = "#99D8E2", color = "black") +
+    geom_point(data = points,
+               aes(x = mean_growing_std, y = lang_per_cap_std,
+                   alpha = -1 * abs(diff)), size = 0.5,
+               inherit.aes = FALSE, show.legend = FALSE) +
+    expand_limits(x = c(-2, 2), y = c(-2.5, 3.5)) +
+    labs(x = "Mean growing season", y = "Languages",
+         subtitle = glue("SD growing season = {facet_levels[i]}")) +
+    theme(plot.subtitle = element_text(size = 10))
+  
+  if (i == 2) {
+    p <- p +
+      theme(plot.margin = margin(0, 20, 0, 20))
+  } else {
+    p <- p +
+      theme(plot.margin = margin(0, 0, 0, 0))
+  }
+  
+  sd_facets[[i]] <- p
+}
+
+mean_facets <- list_along(facet_levels)
+for (i in seq_along(mean_facets)) {
+  points <- nettle %>% 
+    mutate(diff = mean_growing_std - facet_levels[i])
+  
+  p <- int_preds %>% 
+    filter(mean_growing_std == facet_levels[i]) %>% 
+    ggplot(aes(x = sd_growing_std, y = .epred, ymin = .lower,
+               ymax = .upper)) +
+    geom_lineribbon(fill = "#99D8E2", color = "black") +
+    geom_point(data = points,
+               aes(x = sd_growing_std, y = lang_per_cap_std,
+                   alpha = -1 * abs(diff)), size = 0.5,
+               inherit.aes = FALSE, show.legend = FALSE) +
+    expand_limits(x = c(-2, 2), y = c(-2.5, 3.5)) +
+    labs(x = "SD growing season", y = "Languages",
+         subtitle = glue("Mean growing season = {facet_levels[i]}")) +
+    theme(plot.subtitle = element_text(size = 10))
+  
+  if (i == 2) {
+    p <- p +
+      theme(plot.margin = margin(30, 20, 0, 20))
+  } else {
+    p <- p +
+      theme(plot.margin = margin(30, 0, 0, 0))
+  }
+  
+  mean_facets[[i]] <- p
+}
+
+sd_patch <- (sd_facets[[1]] | sd_facets[[2]] | sd_facets[[3]])
+mean_patch <- (mean_facets[[1]] | mean_facets[[2]] | mean_facets[[3]])
+
+sd_patch / mean_patch
+```
+
+
+```{r}
+```
+
